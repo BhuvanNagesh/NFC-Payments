@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Transaction Status</title>
+    <style>
+      /* (Your CSS is unchanged) */
+    </style>
+  </head>
+  <body>
+    <h1>Select Transaction Type</h1>
+    <p>Please choose whether to credit or debit the account.</p>
+    <div class="button-container">
+      <button id="btn-credit">Credit Account</button>
+      <button id="btn-debit">Debit Account</button>
+    </div>
+    <h2 id="status-message"></h2>
+    <p>
+      If payment is successful, you will be redirected back to the payment page.
+    </p>
+
+    <script>
+      // --- Config ---
+      const ESP_IP = "http://192.168.4.1";
+
+      // --- Elements ---
+      const creditButton = document.getElementById("btn-credit");
+      const debitButton = document.getElementById("btn-debit");
+      const statusMessage = document.getElementById("status-message");
+      
+      let pollInterval = null;
+
+      // --- THIS IS THE FIX (Part 1) ---
+      // Get the Transaction ID from the URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const TRANSACTION_ID = urlParams.get('tid');
+
+      // Check if the ID exists, otherwise, it's a fatal error
+      if (!TRANSACTION_ID) {
+        alert("Fatal Error: No Transaction ID (tid) found in URL.");
+        statusMessage.textContent = "Error: No Transaction ID. Please go back.";
+        creditButton.disabled = true;
+        debitButton.disabled = true;
+      }
+
+      /**
+       * This function arms the ESP8266
+       */
+      async function armTransaction(type) {
+        creditButton.disabled = true;
+        debitButton.disabled = true;
+        statusMessage.textContent = `Arming for ${type}...`;
+        statusMessage.style.color = "#1976D2";
+
+        try {
+          // --- THIS IS THE FIX (Part 2) ---
+          // Send the Transaction ID to the ESP
+          const response = await fetch(
+            `${ESP_IP}/setTransaction?type=${type}&tid=${TRANSACTION_ID}`
+          );
+          
+          if (response.ok) {
+            console.log("ESP Armed:", await response.text());
+            statusMessage.textContent = "Please swipe card at reader...";
+            statusMessage.style.color = "#2E7D32";
+            startPolling();
+          } else {
+            throw new Error("Failed to connect to reader.");
+          }
+        } catch (error) {
+          console.error("Error arming transaction:", error);
+          statusMessage.textContent = "Error: Could not connect to reader.";
+          creditButton.disabled = false;
+          debitButton.disabled = false;
+        }
+      }
+
+      /**
+       * This function polls the PHP backend to see if the payment is complete.
+       */
+      async function pollForCompletion() {
+        console.log("Polling backend for result...");
+        
+        try {
+          // --- THIS IS THE FIX (Part 3) ---
+          // Send the Transaction ID to the poller script
+          const response = await fetch(
+            `../backend/confirm_payment_script.php?tid=${TRANSACTION_ID}`
+          );
+
+          if (!response.ok) {
+              throw new Error(`Network error: ${response.statusText}`);
+          }
+          const data = await response.json();
+
+          if (data && data.status === "success") {
+            // SUCCESS!
+            console.log("Payment confirmed by backend!");
+            alert(data.message || "Payment successful");
+            stopPolling();
+            window.location.replace("./funduser.php");
+
+          } else if (data && data.status === "error") {
+            // Handle specific errors
+            console.error("Backend error:", data.message);
+            statusMessage.textContent = "Error: " + data.message;
+            statusMessage.style.color = "#D32F2F";
+            stopPolling();
+
+          } else {
+            // This means data.status is "waiting"
+            console.log("Backend status: waiting...");
+          }
+
+        } catch (error) {
+          console.error("Polling error:", error);
+          statusMessage.textContent = "Error checking status. Retrying...";
+          statusMessage.style.color = "#D32F2F";
+        }
+      }
+
+      // --- (Helper functions startPolling, stopPolling are unchanged) ---
+      function startPolling() {
+        if (!pollInterval) {
+          pollForCompletion();
+          pollInterval = setInterval(pollForCompletion, 2000); // 2-second interval
+        }
+      }
+      function stopPolling() {
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+      }
+
+      // --- Event Listeners (Check for valid ID first) ---
+      if (TRANSACTION_ID) {
+        creditButton.addEventListener("click", () => armTransaction("credit"));
+        debitButton.addEventListener("click", () => armTransaction("debit"));
+      }
+    </script>
+  </body>
+</html>
